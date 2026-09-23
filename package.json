@@ -30,10 +30,22 @@
           "required": false,
           "default": "tenths",
           "data": [
-            { "title": "Seconds (1, 2, 3)", "value": "whole" },
-            { "title": "Half seconds (1, 1.5, 2)", "value": "half" },
-            { "title": "Tenths (1, 1.1, 1.2)", "value": "tenths" },
-            { "title": "Hundredths (1, 1.01, 1.02)", "value": "hundredths" }
+            {
+              "title": "Seconds (1, 2, 3)",
+              "value": "whole"
+            },
+            {
+              "title": "Half seconds (1, 1.5, 2)",
+              "value": "half"
+            },
+            {
+              "title": "Tenths (1, 1.1, 1.2)",
+              "value": "tenths"
+            },
+            {
+              "title": "Hundredths (1, 1.01, 1.02)",
+              "value": "hundredths"
+            }
           ]
         },
         {

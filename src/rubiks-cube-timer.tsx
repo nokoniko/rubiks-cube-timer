@@ -107,7 +107,9 @@ function NotationHelp() {
   return <Detail navigationTitle="Cube Notation" markdown={NOTATION_HELP} />;
 }
 
-function ImportForm({ onImport }: { onImport: (solves: Solve[]) => void }) {
+type ImportOptions = { replace: boolean; minSeconds: number };
+
+function ImportForm({ onImport }: { onImport: (solves: Solve[], options: ImportOptions) => void }) {
   const { pop } = useNavigation();
 
   return (
@@ -117,16 +119,18 @@ function ImportForm({ onImport }: { onImport: (solves: Solve[]) => void }) {
           <Action.SubmitForm
             title="Import"
             icon={Icon.Download}
-            onSubmit={async (values: { file: string[] }) => {
+            onSubmit={async (values: { file: string[]; replace: boolean; minSeconds: string }) => {
               const file = values.file?.[0];
               if (!file) {
                 await showToast({ style: Toast.Style.Failure, title: "No file selected" });
                 return;
               }
+              const parsedMin = Number.parseFloat(values.minSeconds);
+              const minSeconds = Number.isFinite(parsedMin) && parsedMin > 0 ? parsedMin : 0;
               try {
                 const text = await fs.readFile(file, "utf8");
                 const imported = importFromCsTimer(text);
-                onImport(imported);
+                onImport(imported, { replace: values.replace, minSeconds });
                 await showToast({ style: Toast.Style.Success, title: `Imported ${imported.length} solves` });
                 pop();
               } catch (error) {
@@ -139,6 +143,64 @@ function ImportForm({ onImport }: { onImport: (solves: Solve[]) => void }) {
     >
       <Form.Description text="Select a csTimer export file (.txt) to import your solves." />
       <Form.FilePicker id="file" title="csTimer File" allowMultipleSelection={false} />
+      <Form.Checkbox
+        id="replace"
+        title="Replace"
+        label="Forget existing solves and use only the imported ones"
+        defaultValue={false}
+      />
+      <Form.TextField
+        id="minSeconds"
+        title="Remove Solves Under (seconds)"
+        placeholder="0"
+        defaultValue="0"
+        info="Solves faster than this are dropped (useful for accidental stops). 0 keeps everything."
+      />
+    </Form>
+  );
+}
+
+function ExportForm({ solves }: { solves: Solve[] }) {
+  const { pop } = useNavigation();
+
+  return (
+    <Form
+      actions={
+        <ActionPanel>
+          <Action.SubmitForm
+            title="Export"
+            icon={Icon.Upload}
+            onSubmit={async (values: { minSeconds: string }) => {
+              const parsed = Number.parseFloat(values.minSeconds);
+              const minMs = Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : 0;
+              const filtered = minMs > 0 ? solves.filter((s) => s.time >= minMs) : solves;
+              try {
+                const json = exportToCsTimer(filtered);
+                const file = join(homedir(), "Downloads", `cstimer_${timestamp()}.txt`);
+                await fs.writeFile(file, json, "utf8");
+                await showToast({
+                  style: Toast.Style.Success,
+                  title: `Exported ${filtered.length} solves`,
+                  message: file,
+                });
+                await showInFinder(file);
+                pop();
+              } catch (error) {
+                await showToast({ style: Toast.Style.Failure, title: "Export failed", message: String(error) });
+              }
+            }}
+          />
+        </ActionPanel>
+      }
+    >
+      <Form.Description text="Export your solves to a csTimer file in your Downloads folder." />
+      <Form.TextField
+        id="minSeconds"
+        title="Remove Solves Under (seconds)"
+        placeholder="0"
+        defaultValue="0"
+        info="Solves faster than this are left out of the export. 0 exports everything."
+      />
     </Form>
   );
 }
@@ -260,20 +322,13 @@ export default function command() {
     }
   }
 
-  async function exportData() {
-    try {
-      const json = exportToCsTimer(solves);
-      const file = join(homedir(), "Downloads", `cstimer_${timestamp()}.txt`);
-      await fs.writeFile(file, json, "utf8");
-      await showToast({ style: Toast.Style.Success, title: "Exported to Downloads", message: file });
-      await showInFinder(file);
-    } catch (error) {
-      await showToast({ style: Toast.Style.Failure, title: "Export failed", message: String(error) });
-    }
-  }
-
-  function handleImport(imported: Solve[]) {
-    setSolves(mergeSolves(solves, imported));
+  function handleImport(imported: Solve[], options: ImportOptions) {
+    // "replace" starts from an empty list (forgets local solves); otherwise merge into existing.
+    const base = options.replace ? [] : solves;
+    const merged = mergeSolves(base, imported);
+    const minMs = options.minSeconds * 1000;
+    const result = minMs > 0 ? merged.filter((s) => s.time >= minMs) : merged;
+    setSolves(result);
   }
 
   // Scramble image only depends on the scramble, so memoizing keeps a byte-identical data URI while
@@ -305,18 +360,19 @@ export default function command() {
   const timerUri = useMemo(() => timerImage(centerText, big, environment.appearance), [centerText, big]);
   const timerBlock = `<img alt="timer" src="${timerUri}" height="180" />`;
 
-  // Stats are shown only at rest, never while the timer image is reloading, so they can't jump.
-  const eff = solves.map(effectiveTime);
-  const finite = eff.filter((t) => Number.isFinite(t));
-  const best = finite.length > 0 ? Math.min(...finite) : undefined;
-  const ao5 = averageOf(eff, 5);
-  const ao12 = averageOf(eff, 12);
-  const dash = "–";
-  const statsText =
-    solves.length > 0
-      ? `best ${best !== undefined ? formatTime(best) : dash}  ·  ao5 ${ao5 !== undefined ? formatTime(ao5) : dash}  ·  ao12 ${ao12 !== undefined ? formatTime(ao12) : dash}  ·  solves ${solves.length}`
-      : undefined;
-  const statsUri = useMemo(() => (statsText ? statsImage(statsText, environment.appearance) : ""), [statsText]);
+  // Stats only change when a solve is added, so compute them (and their image) once per solve
+  // instead of on every timer tick. They're shown only at rest, so they can never jump.
+  const statsUri = useMemo(() => {
+    if (solves.length === 0) return "";
+    const eff = solves.map(effectiveTime);
+    const finite = eff.filter((t) => Number.isFinite(t));
+    const dash = "–";
+    const best = finite.length > 0 ? formatTime(Math.min(...finite)) : dash;
+    const ao5 = averageOf(eff, 5);
+    const ao12 = averageOf(eff, 12);
+    const text = `best ${best}  ·  ao5 ${ao5 !== undefined ? formatTime(ao5) : dash}  ·  ao12 ${ao12 !== undefined ? formatTime(ao12) : dash}  ·  solves ${solves.length}`;
+    return statsImage(text, environment.appearance);
+  }, [solves]);
   const statsBlock = phase === "idle" && statsUri ? `![stats](${statsUri})` : "";
 
   const markdown = [`![scramble](${top})`, timerBlock, statsBlock].filter(Boolean).join("\n\n");
@@ -352,11 +408,11 @@ export default function command() {
             shortcut={shortcut(["cmd"], "/")}
             target={<NotationHelp />}
           />
-          <Action
+          <Action.Push
             title="Export to Cstimer"
             icon={Icon.Upload}
             shortcut={shortcut(["cmd", "shift"], "e")}
-            onAction={exportData}
+            target={<ExportForm solves={solves} />}
           />
           <Action.Push
             title="Import from Cstimer"

@@ -25,5 +25,4 @@ The recorded time is always exact regardless of this setting; it only changes ho
 - **Export to csTimer** (⌘⇧E) writes a `cstimer_<timestamp>.txt` file to your Downloads folder that you can import directly into csTimer.
 - **Import from csTimer** (⌘⇧I) lets you pick a csTimer export file and merges those solves into your history (duplicates are skipped).
 
-
 Notation pictures are taken from https://www.cube.academy/ so give them some love :)
